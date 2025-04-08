@@ -1,0 +1,38 @@
+{
+  "family": "testing-task",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "arn:aws:iam::228791704066:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "testing-container",
+      "image": "image-placeholder",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "hostPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ASPNETCORE_ENVIRONMENT",
+          "value": "Production"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/testing-task",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512"
+}
