@@ -29,11 +29,11 @@ jobs:
       - name: Build Project
         run: dotnet build Testing/Testing.csproj --configuration Release --no-restore
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::228791704066:role/GitHubActionsOIDCRole
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-region: us-east-1
 
       - name: Login to Amazon ECR
         id: login-ecr
