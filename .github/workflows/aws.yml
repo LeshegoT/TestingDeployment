@@ -1,5 +1,4 @@
-name: Deploy Testing Project to ECS
-
+name: Deploy
 permissions:
   id-token: write
   contents: read
@@ -8,12 +7,11 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - master
+      - main
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -24,45 +22,102 @@ jobs:
           dotnet-version: 8.x
 
       - name: Restore Dependencies
-        run: dotnet restore Testing/Testing.csproj
+        run: dotnet restore
 
       - name: Build Project
-        run: dotnet build Testing/Testing.csproj --configuration Release --no-restore
-        
+        run: dotnet build --no-restore
+
+      - name: Run Tests
+        run: dotnet test --no-build --verbosity normal
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: Production 
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::228791704066:role/GitHubActionsOIDCRole
-          aws-region: us-east-1
-          
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+          role-to-assume: arn:aws:iam::574836245203:role/GitHubActionsOIDCRole
+          aws-region: af-south-1 
 
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: stellar-path-api
-          IMAGE_TAG: ${{ github.sha }}
+      - name: Get Terraform Outputs
+        uses: dflook/terraform-output@v1
+        id: tf-outputs
+        with:
+          path: terraform
+
+      - name: Publish Docker Image to Amazon ECR
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -f Testing/Dockerfile .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          REPOSITORY_URI=${{ steps.tf-outputs.outputs.ecr_repository_url }}
+          IMAGE_TAG=latest
 
-      - name: Fill in the new task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: .github/workflows/task-definition.json
-          container-name: testing-container
-          image: ${{ steps.build-image.outputs.image }}
+          docker build -t $REPOSITORY_URI:$IMAGE_TAG -f docker/Dockerfile .
+          aws ecr get-login-password --region af-south-1 | docker login --username AWS --password-stdin $REPOSITORY_URI
+          docker push $REPOSITORY_URI:$IMAGE_TAG
 
-      - name: Deploy to Amazon ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: Production 
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ steps.tf-outputs.outputs.ecs_service_name }}
-          cluster: ${{ steps.tf-outputs.outputs.ecs_cluster_name }}
-          wait-for-service-stability: true
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsOIDCRole
+          aws-region: af-south-1 
+      - name: Setup Terraform
+        uses: hashicorp/terraform-github-actions@v2
+        with:
+          terraform_version: ">= 1.0"
+          setup_only: true
+
+      - name: Initialize Terraform
+        run: terraform init
+        working-directory: terraform
+
+      - name: Plan Terraform
+        id: tf-plan
+        run: terraform plan -no-color \
+          -var="app_name=${{ github.event.repository.name }}" \
+          -var="db_name=${{ secrets.DB_NAME }}" \
+          -var="db_username=${{ secrets.DB_USERNAME }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="ecr_repository_url=${{ steps.tf-outputs.outputs.ecr_repository_url }}" \
+          -var="rds_endpoint=${{ steps.tf-outputs.outputs.rds_endpoint }}"
+        working-directory: terraform
+        continue-on-error: true
+
+      - name: Show Terraform Plan
+        if: steps.tf-plan.outcome == 'success'
+        run: echo "Terraform Plan:\n$(cat terraform/terraform.tfplan)"
+
+      - name: Apply Terraform
+        if: steps.tf-plan.outcome == 'success'
+        run: terraform apply -auto-approve \
+          -var="app_name=${{ github.event.repository.name }}" \
+          -var="db_name=${{ secrets.DB_NAME }}" \
+          -var="db_username=${{ secrets.DB_USERNAME }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="ecr_repository_url=${{ steps.tf-outputs.outputs.ecr_repository_url }}" \
+          -var="rds_endpoint=${{ steps.tf-outputs.outputs.rds_endpoint }}"
+        working-directory: terraform
+
+      - name: Wait for ECS Service Stability
+        run: |
+          aws ecs wait service-stable --cluster "${{ github.event.repository.name }}-cluster" \
+            --service "${{ github.event.repository.name }}-service"
+        working-directory: terraform
+        env:
+          AWS_REGION: af-south-1 
