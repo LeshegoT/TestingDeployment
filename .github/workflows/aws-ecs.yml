@@ -15,21 +15,17 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.x
-
       - name: Restore Dependencies
         run: dotnet restore
-
       - name: Build Project
         run: dotnet build --no-restore
-
       - name: Run Tests
         run: dotnet test --no-build --verbosity normal
-
+        
   publish:
     needs: build
     runs-on: ubuntu-latest
