@@ -21,10 +21,15 @@ jobs:
           dotnet-version: 8.x
       - name: Restore Dependencies
         run: dotnet restore
+        working-directory: ./Testing
+        
       - name: Build Project
         run: dotnet build --no-restore
+        working-directory: ./Testing
+        
       - name: Run Tests
         run: dotnet test --no-build --verbosity normal
+        working-directory: ./Testing
         
   publish:
     needs: build
